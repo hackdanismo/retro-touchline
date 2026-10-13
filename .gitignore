@@ -1,0 +1,55 @@
+# ====================================
+# Retro Touchline - Rust Football Manager
+# ====================================
+
+# Rust build output
+/target/
+**/target/
+
+# Rust backup files
+**/*.rs.bk
+
+# Debug binaries
+*.pdb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# IDE / Editor
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Environment files / secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Local game data (future features)
+/saves/
+/autosaves/
+/local_data/
+
+# Test coverage
+/coverage/
+*.profraw
+*.profdata
