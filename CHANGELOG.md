@@ -23,3 +23,4 @@
 - Manager appointment: Choose a club and enter your manager's name.
 - Personalised Inbox: Chairman's welcome and manager appointment news use the selected club.
 - Local JSON database: Club information is now separate from Rust code.
+- World hub allowing players to search for clubs, players and staff found inside of the game.
