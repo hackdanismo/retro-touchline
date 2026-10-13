@@ -226,7 +226,7 @@ fn side_bar(root: &mut egui::Ui, screen: &mut Screen) {
             ui.separator();
             ui.add_space(10.0);
             ui.add(text("INBOX", SIDEBAR_WHITE, 10.0));
-            ui.add(text("3 messages", SIDEBAR_WHITE, 12.0));
+            ui.add(text("5 messages", SIDEBAR_WHITE, 12.0));
         });
 }
 
@@ -246,53 +246,120 @@ fn nav_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     response.clicked()
 }
 
-fn inbox_view(ui: &mut egui::Ui, selected_message: &mut usize) {
-    section_heading(ui, "INBOX", "3 messages  ·  Chelsea FC");
-    ui.add(text("CLUB CORRESPONDENCE", MUTED, 11.0));
+// Messages for the current career. Legacy messages remain alongside the
+// chairman's expectations and the manager appointment news item.
+fn inbox_view(ui: &mut egui::Ui, selected_message: &mut usize, manager_name: &str) {
+    let entries: Vec<(String, String, String, String, String)> = vec![
+        (
+            "Ken Bates · Chairman".into(), "Board expectations and transfer budget".into(),
+            "18 Aug 2001".into(), "Welcome to Stamford Bridge. Your objectives for this season...".into(),
+            format!("Dear {},\n\nWelcome to Chelsea Football Club. The board is pleased to appoint you as manager.\n\nOur expectations for the 2001/02 season are to compete for a European qualification place in the Premier League, remain competitive in the domestic cups, and build a disciplined, entertaining team.\n\nFor this prototype, your initial transfer budget is £2,000,000 and the illustrative weekly wage budget is £82,000. Please review your players and tactics before our upcoming match.\n\nYou will have the board's backing as you begin your career at Stamford Bridge.\n\nKen Bates\nChairman", manager_name),
+        ),
+        (
+            "Football News · Breaking News".into(), format!("Chelsea appoint {} as new manager", manager_name),
+            "18 Aug 2001".into(), "Chelsea Football Club have announced a new appointment...".into(),
+            format!("CHELSEA APPOINT NEW MANAGER\n\nChelsea Football Club have confirmed the appointment of {} as their new first-team manager.\n\nThe new boss takes charge at Stamford Bridge ahead of the 2001/02 campaign. Supporters will be keen to see the new manager's tactics, squad selection and approach to transfers.\n\nThis news article is fictional content generated for your Retro Touchline career.", manager_name),
+        ),
+    ];
+    let mut entries = entries;
+    entries.extend(MESSAGES.iter().map(|m| (m.sender.into(), m.subject.into(), m.date.into(), m.preview.into(), m.body.into())));
+    let count = entries.len();
+    *selected_message = (*selected_message).min(count.saturating_sub(1));
+    section_heading(ui, "INBOX", &format!("{} messages · Chelsea FC", count));
+    ui.add(text("CLUB CORRESPONDENCE & FOOTBALL NEWS", MUTED, 11.0));
     ui.add_space(10.0);
-
-    // Message list on top, selected message body below: fits narrower windows too.
-    egui::Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, DIVIDER))
-        .inner_margin(8)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            for (index, message) in MESSAGES.iter().enumerate() {
-                let selected = *selected_message == index;
-                let fill = if selected { PANEL_ALT } else { PANEL };
-                let row = egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(12, 10))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(message.sender).color(if selected { GOLD } else { WHITE }).strong().size(13.0));
-                                ui.label(RichText::new(message.subject).color(WHITE).size(12.0));
-                                ui.add(text(message.preview, MUTED, 11.0));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                ui.add(text(message.date, MUTED, 11.0));
-                            });
-                        });
+    egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, DIVIDER)).inner_margin(8).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for (index, (sender, subject, date, preview, _)) in entries.iter().enumerate() {
+            let selected = *selected_message == index;
+            let fill = if selected { PANEL_ALT } else { PANEL };
+            let row = egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(sender).color(if selected { GOLD } else { WHITE }).strong().size(13.0));
+                        ui.label(RichText::new(subject).color(WHITE).size(12.0));
+                        ui.add(text(preview, MUTED, 11.0));
                     });
-                if ui.interact(row.response.rect, ui.id().with(index), egui::Sense::click()).clicked() {
-                    *selected_message = index;
-                }
-                if index + 1 != MESSAGES.len() { ui.separator(); }
-            }
-        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| { ui.add(text(date, MUTED, 11.0)); });
+                });
+            });
+            if ui.interact(row.response.rect, ui.id().with(index), egui::Sense::click()).clicked() { *selected_message = index; }
+            if index + 1 != count { ui.separator(); }
+        }
+    });
     ui.add_space(14.0);
     boxed_panel(ui, |ui| {
-        let message = &MESSAGES[*selected_message];
-        ui.label(RichText::new(message.subject).color(GOLD).size(17.0).strong());
+        let (sender, subject, date, _, body) = &entries[*selected_message];
+        ui.label(RichText::new(subject).color(GOLD).size(17.0).strong());
         ui.add_space(6.0);
-        info_line(ui, "From", message.sender);
-        info_line(ui, "Date", message.date);
+        info_line(ui, "From", sender);
+        info_line(ui, "Date", date);
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
-        ui.label(RichText::new(message.body).color(WHITE).size(13.0));
+        ui.label(RichText::new(body).color(WHITE).size(13.0));
     });
+}
+
+// First-run club selection. Chelsea is the only selectable club at present.
+fn new_career_view(ui: &mut egui::Ui, manager_name: &mut String, preview_club: &mut bool) -> bool {
+    ui.vertical_centered(|ui| {
+        ui.add_space(14.0);
+        ui.label(RichText::new("RETRO TOUCHLINE").color(GOLD).size(31.0).strong());
+        ui.label(RichText::new("NEW CAREER · 2001/02").color(MUTED).size(13.0));
+        ui.add_space(20.0);
+    });
+    section_heading(ui, "CHOOSE YOUR CLUB", "Available clubs · England");
+    boxed_panel(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new("CHELSEA FC").color(GOLD).strong().size(20.0));
+                ui.add(text("London · Premier League · The Blues", WHITE, 13.0));
+                ui.add(text("Selected club · Chelsea is the first available team", MUTED, 11.0));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(if *preview_club { "Hide club preview" } else { "View club & squad" }).clicked() {
+                    *preview_club = !*preview_club;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        if *preview_club {
+            ui.separator();
+            ui.add_space(9.0);
+            ui.columns(2, |cols| {
+                cols[0].label(RichText::new("CLUB INFORMATION").color(GOLD).strong());
+                info_line(&mut cols[0], "Founded", "1905");
+                info_line(&mut cols[0], "Ground", "Stamford Bridge");
+                info_line(&mut cols[0], "City", "London, England");
+                info_line(&mut cols[0], "Chairman", "Ken Bates");
+                info_line(&mut cols[0], "League", "Premier League");
+                info_line(&mut cols[0], "Transfer budget", "£2,000,000 (demo)");
+                cols[1].label(RichText::new("2001/02 SQUAD PREVIEW").color(GOLD).strong());
+                egui::ScrollArea::vertical().max_height(240.0).show(&mut cols[1], |ui| {
+                    for player in PLAYERS {
+                        ui.add(text(format!("#{:02}  {:<24}  {}", player.number, player.name, player.position), WHITE, 12.0));
+                    }
+                });
+            });
+        }
+    });
+    ui.add_space(20.0);
+    section_heading(ui, "ADD MANAGER", "Set up your new managerial career");
+    let mut launch = false;
+    boxed_panel(ui, |ui| {
+        ui.label(RichText::new("Manager name").color(WHITE).strong());
+        ui.add(egui::TextEdit::singleline(manager_name).hint_text("Enter your manager's name").desired_width(340.0));
+        ui.add_space(8.0);
+        ui.add(text("Your name will appear in the club Inbox, appointment announcement, and Manager profile.", MUTED, 11.0));
+        ui.add_space(16.0);
+        let valid = !manager_name.trim().is_empty();
+        let button = ui.add_enabled(valid, egui::Button::new(RichText::new("TAKE CHARGE OF CHELSEA  →").color(HEADER).strong()).fill(GOLD));
+        if !valid { ui.add(text("Enter a manager name to start your career.", GOLD, 11.0)); }
+        launch = button.clicked();
+    });
+    launch
 }
 
 // Prototype player information. Attributes and contract figures are illustrative,
@@ -542,12 +609,12 @@ fn page_panel(ui: &mut egui::Ui, title: &str, subtitle: &str, rows: &[(&str, &st
     });
     ui.add_space(12.0);
 }
-fn page_view(ui: &mut egui::Ui, screen: Screen) {
+fn page_view(ui: &mut egui::Ui, screen: Screen, manager_name: &str) {
     match screen {
         Screen::Overview => {
             page_panel(ui, "CLUB OVERVIEW", "Chelsea Football Club · 2001/02", &[
                 ("Home", "Stamford Bridge, London"), ("Competition", "Premier League"),
-                ("Manager", "Claudio Ranieri (historical 2001/02)"), ("Chairman", "Ken Bates"),
+                ("Manager", manager_name), ("Chairman", "Ken Bates"),
                 ("Next match", "Chelsea vs Manchester United (demo fixture)"),
             ]);
             page_panel(ui, "SEASON DASHBOARD", "Not simulated", &[("League position", "—"), ("Played", "—"), ("Wins / draws / losses", "—"), ("Goals scored", "—")]);
@@ -573,11 +640,11 @@ fn page_view(ui: &mut egui::Ui, screen: Screen) {
             page_panel(ui, "FINANCIAL REPORT", "No accounting engine", &[("Matchday revenue", "—"), ("Merchandise", "—"), ("Transfer expenditure", "—")]);
         }
         Screen::Staff => {
-            page_panel(ui, "CLUB STAFF", "Historical names and demo vacancies", &[("First-team manager", "Claudio Ranieri (historical)"), ("Chairman", "Ken Bates"), ("Assistant manager", "Not assigned in prototype"), ("Head scout", "Not assigned in prototype"), ("Physio", "Not assigned in prototype")]);
+            page_panel(ui, "CLUB STAFF", "Historical names and demo vacancies", &[("First-team manager", manager_name), ("Chairman", "Ken Bates"), ("Assistant manager", "Not assigned in prototype"), ("Head scout", "Not assigned in prototype"), ("Physio", "Not assigned in prototype")]);
             page_panel(ui, "STAFF SEARCH", "Coming later", &[("Candidates", "No staff database yet"), ("Contracts", "Not implemented")]);
         }
         Screen::Manager => {
-            page_panel(ui, "MANAGER PROFILE", "Player-managed Chelsea save · mock-up", &[("Club", "Chelsea FC"), ("Role", "Manager"), ("Start date", "18 August 2001 (demo)"), ("Career matches", "0"), ("Reputation", "Not calculated")]);
+            page_panel(ui, "MANAGER PROFILE", manager_name, &[("Club", "Chelsea FC"), ("Role", "Manager"), ("Start date", "18 August 2001 (demo)"), ("Career matches", "0"), ("Reputation", "Not calculated")]);
             page_panel(ui, "CAREER HISTORY", "Not simulated", &[("Previous clubs", "None recorded"), ("Trophies", "0"), ("Achievements", "None recorded")]);
         }
         Screen::Squad | Screen::Inbox | Screen::Tactics | Screen::LeagueTable | Screen::Match | Screen::Results => {}
@@ -1289,17 +1356,35 @@ struct FootballManagerUi {
     league_view: usize,
     squad: SquadEditor,
     match_state: MatchState,
+    setup_complete: bool,
+    manager_name: String,
+    preview_club: bool,
 }
 
 impl Default for FootballManagerUi {
     fn default() -> Self {
-        Self { screen: Screen::Squad, selected_message: 0, tactics: TacticsEditor::default(), competition_tab: 0, league_view: 0, squad: SquadEditor::default(), match_state: MatchState::default() }
+        Self { screen: Screen::Squad, selected_message: 0, tactics: TacticsEditor::default(), competition_tab: 0, league_view: 0, squad: SquadEditor::default(), match_state: MatchState::default(), setup_complete: false, manager_name: String::new(), preview_club: true }
     }
 }
 
 impl eframe::App for FootballManagerUi {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         root.ctx().set_visuals(egui::Visuals::dark());
+        if !self.setup_complete {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(32, 24)))
+                .show(root, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if new_career_view(ui, &mut self.manager_name, &mut self.preview_club) {
+                            self.manager_name = self.manager_name.trim().to_owned();
+                            self.setup_complete = true;
+                            self.selected_message = 0;
+                            self.screen = Screen::Inbox;
+                        }
+                    });
+                });
+            return;
+        }
         self.match_state.tick();
         if self.match_state.halftime_pending {
             self.match_state.halftime_pending = false;
@@ -1332,10 +1417,10 @@ impl eframe::App for FootballManagerUi {
                         Screen::Match => match_view(ui, &mut self.match_state, &mut self.screen),
                         Screen::Results => matchday_results_view(ui, &mut self.match_state, &mut self.screen),
                         Screen::Squad => boxed_panel(ui, |ui| squad_view(ui, &mut self.squad)),
-                        Screen::Inbox => inbox_view(ui, &mut self.selected_message),
+                        Screen::Inbox => inbox_view(ui, &mut self.selected_message, &self.manager_name),
                         Screen::Tactics => tactics_view(ui, &mut self.tactics),
                         Screen::LeagueTable => competitions_view(ui, &mut self.competition_tab, &mut self.league_view),
-                        other => page_view(ui, other),
+                        other => page_view(ui, other, &self.manager_name),
                     }
                 });
             });
