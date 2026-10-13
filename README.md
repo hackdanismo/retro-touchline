@@ -1,2 +1,8 @@
-# retro-touchline
-An open-source Football Management game written in Rust. Created to replicate the early Football Manager and Championship Manager games.
+# Retro Touchline
+An open-source `Football Management` game written in `Rust`. Created to replicate the early Football Manager and Championship Manager games.
+
+## Run the Game
+
+```shell
+$ cargo run
+```
