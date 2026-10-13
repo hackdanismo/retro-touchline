@@ -17,3 +17,9 @@
 - Manager summary page.
 - Simulated match engine showing demo game of Chelsea v Manchester United.
 - New game screen to allow a team to be selected, having displayed team/club information, and add a manager name. The user is then taken to the inbox where the chairman will provide a welcome message and the inbox will display a news article announcing the appointment.
+- 20 selectable clubs: All 2001/02 Premier League teams.
+- Chelsea selected by default: the existing game remains available.
+- Club previews: View the selected club's stadium, city, founding year, chairman and other information.
+- Manager appointment: Choose a club and enter your manager's name.
+- Personalised Inbox: Chairman's welcome and manager appointment news use the selected club.
+- Local JSON database: Club information is now separate from Rust code.
