@@ -19,6 +19,36 @@ const CHELSEA_BLUE: Color32 = Color32::from_rgb(3, 70, 148); // #034694
 const CHELSEA_BLUE_ACTIVE: Color32 = Color32::from_rgb(26, 96, 172);
 const SIDEBAR_WHITE: Color32 = Color32::WHITE;
 
+// Club metadata lives in editable data/clubs.json rather than source-code constants.
+// Use the on-disk file for desktop development; embedded JSON keeps packaged builds usable.
+#[derive(Clone, serde::Deserialize)]
+struct Club {
+    id: String,
+    name: String,
+    city: String,
+    stadium: String,
+    nickname: String,
+    founded: u16,
+    competition: String,
+    chairman: String,
+    transfer_budget: u64,
+    weekly_wage_budget: u64,
+    squad_available: bool,
+}
+#[derive(serde::Deserialize)]
+struct ClubDatabase { season: String, clubs: Vec<Club> }
+fn load_clubs() -> ClubDatabase {
+    let source = std::fs::read_to_string("data/clubs.json")
+        .unwrap_or_else(|_| include_str!("../data/clubs.json").to_owned());
+    serde_json::from_str(&source).unwrap_or_else(|error| {
+        eprintln!("Unable to load local clubs.json: {error}; using bundled data");
+        serde_json::from_str(include_str!("../data/clubs.json"))
+            .expect("Bundled clubs.json must be valid")
+    })
+}
+
+
+
 struct Player {
     number: u8,
     name: &'static str,
@@ -73,18 +103,18 @@ const PLAYERS: &[Player] = &[
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Overview, Squad, Tactics, Training, Fixtures, LeagueTable,
-    Inbox, Transfers, Scouting, Finances, Staff, Manager, Match, Results,
+    Inbox, Transfers, Scouting, Finances, Staff, Manager, World, Match, Results,
 }
 
 impl Screen {
     const CLUB: [Self; 6] = [Self::Overview, Self::Squad, Self::Tactics, Self::Training, Self::Fixtures, Self::LeagueTable];
-    const MANAGEMENT: [Self; 6] = [Self::Inbox, Self::Transfers, Self::Scouting, Self::Finances, Self::Staff, Self::Manager];
+    const MANAGEMENT: [Self; 7] = [Self::Inbox, Self::Transfers, Self::Scouting, Self::Finances, Self::Staff, Self::Manager, Self::World];
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview", Self::Squad => "Squad", Self::Tactics => "Tactics",
             Self::Training => "Training", Self::Fixtures => "Fixtures", Self::LeagueTable => "Competitions",
             Self::Inbox => "Inbox", Self::Transfers => "Transfers", Self::Scouting => "Scouting",
-            Self::Finances => "Finances", Self::Staff => "Staff", Self::Manager => "Manager", Self::Match => "Match Centre", Self::Results => "Matchday Results",
+            Self::Finances => "Finances", Self::Staff => "Staff", Self::Manager => "Manager", Self::World => "World / Links", Self::Match => "Match Centre", Self::Results => "Matchday Results",
         }
     }
 }
@@ -158,10 +188,48 @@ fn boxed_panel(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
         .show(ui, content);
 }
 
+// All entity links use the same destination, regardless of which screen they come from.
+// Pending navigation is applied after rendering, avoiding mutable-state borrowing conflicts.
+#[derive(Clone, Debug)]
+enum WorldTarget { Club(String), Player(usize), Person(String) }
+const WORLD_NAV_KEY: &str = "retro_touchline_world_navigation";
+fn go_to_world(ui: &egui::Ui, target: WorldTarget) {
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(WORLD_NAV_KEY), target));
+}
+fn world_link(ui: &mut egui::Ui, label: &str, target: WorldTarget) {
+    if ui.add(egui::Button::new(RichText::new(label).color(GOLD).underline().size(12.0))
+        .fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+        go_to_world(ui, target);
+    }
+}
+fn known_target(label: &str) -> Option<WorldTarget> {
+    let normalized = label.trim().trim_end_matches(" FC");
+    if let Some(index) = PLAYERS.iter().position(|p| p.name.eq_ignore_ascii_case(label)) {
+        return Some(WorldTarget::Player(index));
+    }
+    if let Some(club) = PREMIER_LEAGUE_0102.iter().chain(FIRST_DIVISION_0102.iter())
+        .find(|club_name| club_name.eq_ignore_ascii_case(label) || club_name.eq_ignore_ascii_case(normalized)) {
+        return Some(WorldTarget::Club((*club).to_owned()));
+    }
+    if ["Ken Bates", "Steve Clarke", "Claudio Ranieri"].iter().any(|n| n.eq_ignore_ascii_case(label)) {
+        return Some(WorldTarget::Person(label.to_owned()));
+    }
+    None
+}
+fn link_or_text(ui: &mut egui::Ui, value: &str) {
+    if let Some(target) = known_target(value) { world_link(ui, value, target); }
+    else { ui.add(text(value, WHITE, 12.0)); }
+}
 fn info_line(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         ui.add_sized([103.0, 18.0], text(label, MUTED, 12.0));
-        ui.add(text(value, WHITE, 12.0));
+        if label == "Manager" && !value.trim().is_empty() {
+            world_link(ui, value, WorldTarget::Person(value.to_owned()));
+        } else if label == "Chairman" && value != "Not recorded" {
+            world_link(ui, value, WorldTarget::Person(value.to_owned()));
+        } else {
+            link_or_text(ui, value);
+        }
     });
 }
 
@@ -202,14 +270,27 @@ fn top_bar(root: &mut egui::Ui, screen: &mut Screen, match_state: &mut MatchStat
         });
 }
 
-fn side_bar(root: &mut egui::Ui, screen: &mut Screen) {
+fn top_bar_non_chelsea(root: &mut egui::Ui, club: &Club) {
+    egui::Panel::top("top_bar").exact_size(77.0)
+        .frame(egui::Frame::new().fill(HEADER).inner_margin(egui::Margin::symmetric(18, 9)))
+        .show(root, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("RETRO TOUCHLINE").color(GOLD).size(23.0).strong());
+                ui.separator();
+                ui.label(format!("{} · 2001/02 (club preview)", club.name));
+                ui.label(RichText::new("Match demo available for Chelsea only").color(MUTED));
+            });
+        });
+}
+
+fn side_bar(root: &mut egui::Ui, screen: &mut Screen, club: &Club) {
     egui::Panel::left("sidebar")
         .exact_size(192.0)
         .resizable(false)
         .frame(egui::Frame::new().fill(CHELSEA_BLUE).inner_margin(egui::Margin::symmetric(12, 16)))
         .show(root, |ui| {
-            ui.label(RichText::new("CHELSEA FC").color(SIDEBAR_WHITE).size(15.0).strong());
-            ui.add(text("The Blues  ·  London, England", SIDEBAR_WHITE, 11.0));
+            ui.label(RichText::new(&club.name).color(SIDEBAR_WHITE).size(15.0).strong());
+            ui.add(text(format!("{} · {}", club.nickname, club.city), SIDEBAR_WHITE, 11.0));
             ui.add_space(22.0);
             ui.add(text("CLUB", SIDEBAR_WHITE, 10.0));
             ui.add_space(8.0);
@@ -226,7 +307,7 @@ fn side_bar(root: &mut egui::Ui, screen: &mut Screen) {
             ui.separator();
             ui.add_space(10.0);
             ui.add(text("INBOX", SIDEBAR_WHITE, 10.0));
-            ui.add(text("3 messages", SIDEBAR_WHITE, 12.0));
+            ui.add(text(if club.id == "chelsea" { "5 messages" } else { "2 messages" }, SIDEBAR_WHITE, 12.0));
         });
 }
 
@@ -246,53 +327,120 @@ fn nav_row(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     response.clicked()
 }
 
-fn inbox_view(ui: &mut egui::Ui, selected_message: &mut usize) {
-    section_heading(ui, "INBOX", "3 messages  ·  Chelsea FC");
-    ui.add(text("CLUB CORRESPONDENCE", MUTED, 11.0));
+// Messages for the current career. Legacy messages remain alongside the
+// chairman's expectations and the manager appointment news item.
+fn inbox_view(ui: &mut egui::Ui, selected_message: &mut usize, manager_name: &str, club: &Club) {
+    let mut entries: Vec<(String, String, String, String, String)> = vec![
+        (
+            format!("{} · Chairman", club.chairman),
+            "Board expectations and transfer budget".into(),
+            "18 Aug 2001".into(),
+            format!("Welcome to {}. Your objectives for the season...", club.name),
+            format!("Dear {},\n\nWelcome to {}. The board expects you to guide the team confidently through the 2001/02 {} season and compete in the cups.\n\nYour starting transfer budget in this demonstration is £{} and the weekly wage budget is £{}.\n\nRegards,\n{}\nChairman", manager_name, club.name, club.competition, club.transfer_budget, club.weekly_wage_budget, club.chairman),
+        ),
+        (
+            "Football News · Breaking News".into(),
+            format!("{} appoint {} as new manager", club.name, manager_name),
+            "18 Aug 2001".into(),
+            format!("{} announce their new manager...", club.name),
+            format!("NEW MANAGER APPOINTED\n\n{} have announced {} as their new manager ahead of the 2001/02 campaign. The appointment is fictional news generated for your Retro Touchline save.", club.name, manager_name),
+        ),
+    ];
+    if club.id == "chelsea" {
+        entries.extend(MESSAGES.iter().map(|m| (m.sender.into(), m.subject.into(), m.date.into(), m.preview.into(), m.body.into())));
+    }
+    let count = entries.len();
+    *selected_message = (*selected_message).min(count.saturating_sub(1));
+    section_heading(ui, "INBOX", &format!("{} messages · {}", count, club.name));
+    ui.add(text("CLUB CORRESPONDENCE & FOOTBALL NEWS", MUTED, 11.0));
     ui.add_space(10.0);
-
-    // Message list on top, selected message body below: fits narrower windows too.
-    egui::Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, DIVIDER))
-        .inner_margin(8)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            for (index, message) in MESSAGES.iter().enumerate() {
-                let selected = *selected_message == index;
-                let fill = if selected { PANEL_ALT } else { PANEL };
-                let row = egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(12, 10))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(message.sender).color(if selected { GOLD } else { WHITE }).strong().size(13.0));
-                                ui.label(RichText::new(message.subject).color(WHITE).size(12.0));
-                                ui.add(text(message.preview, MUTED, 11.0));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                ui.add(text(message.date, MUTED, 11.0));
-                            });
-                        });
+    egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, DIVIDER)).inner_margin(8).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for (index, (sender, subject, date, preview, _)) in entries.iter().enumerate() {
+            let selected = *selected_message == index;
+            let fill = if selected { PANEL_ALT } else { PANEL };
+            let row = egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(sender).color(if selected { GOLD } else { WHITE }).strong().size(13.0));
+                        ui.label(RichText::new(subject).color(WHITE).size(12.0));
+                        ui.add(text(preview, MUTED, 11.0));
                     });
-                if ui.interact(row.response.rect, ui.id().with(index), egui::Sense::click()).clicked() {
-                    *selected_message = index;
-                }
-                if index + 1 != MESSAGES.len() { ui.separator(); }
-            }
-        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| { ui.add(text(date, MUTED, 11.0)); });
+                });
+            });
+            if ui.interact(row.response.rect, ui.id().with(index), egui::Sense::click()).clicked() { *selected_message = index; }
+            if index + 1 != count { ui.separator(); }
+        }
+    });
     ui.add_space(14.0);
     boxed_panel(ui, |ui| {
-        let message = &MESSAGES[*selected_message];
-        ui.label(RichText::new(message.subject).color(GOLD).size(17.0).strong());
+        let (sender, subject, date, _, body) = &entries[*selected_message];
+        ui.label(RichText::new(subject).color(GOLD).size(17.0).strong());
         ui.add_space(6.0);
-        info_line(ui, "From", message.sender);
-        info_line(ui, "Date", message.date);
+        info_line(ui, "From", sender);
+        info_line(ui, "Date", date);
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
-        ui.label(RichText::new(message.body).color(WHITE).size(13.0));
+        ui.label(RichText::new(body).color(WHITE).size(13.0));
     });
+}
+
+// Club selector is populated from the local JSON database.
+fn new_career_view(ui: &mut egui::Ui, manager_name: &mut String, preview_club: &mut bool, clubs: &[Club], selected: &mut usize) -> bool {
+    ui.vertical_centered(|ui| {
+        ui.add_space(14.0);
+        ui.label(RichText::new("RETRO TOUCHLINE").color(GOLD).size(31.0).strong());
+        ui.label(RichText::new("NEW CAREER · 2001/02").color(MUTED).size(13.0));
+        ui.add_space(20.0);
+    });
+    section_heading(ui, "CHOOSE YOUR CLUB", "2001/02 Premier League · loaded from data/clubs.json");
+    let mut launch = false;
+    boxed_panel(ui, |ui| {
+        ui.columns(2, |columns| {
+            columns[0].label(RichText::new("AVAILABLE CLUBS").color(GOLD).strong());
+            egui::ScrollArea::vertical().id_salt("career_club_selector_scroll").max_height(290.0).show(&mut columns[0], |ui| {
+                for (i, club) in clubs.iter().enumerate() {
+                    if ui.selectable_label(*selected == i, &club.name).clicked() { *selected = i; *preview_club = true; }
+                }
+            });
+            if let Some(club) = clubs.get(*selected) {
+                columns[1].label(RichText::new(&club.name).color(GOLD).strong().size(20.0));
+                columns[1].label(format!("{} · {} · {}", club.city, club.competition, club.nickname));
+                if columns[1].button(if *preview_club { "Hide club preview" } else { "View club information" }).clicked() { *preview_club = !*preview_club; }
+                if *preview_club {
+                    columns[1].separator();
+                    info_line(&mut columns[1], "Founded", &club.founded.to_string());
+                    info_line(&mut columns[1], "Stadium", &club.stadium);
+                    info_line(&mut columns[1], "Chairman", &club.chairman);
+                    info_line(&mut columns[1], "Transfer budget", &format!("£{} (demo)", club.transfer_budget));
+                    if club.squad_available {
+                        columns[1].label(RichText::new("2001/02 SQUAD PREVIEW").color(GOLD).strong());
+                        egui::ScrollArea::vertical().id_salt("career_squad_preview_scroll").max_height(150.0).show(&mut columns[1], |ui| {
+                            for player in PLAYERS { ui.label(format!("#{:02}  {} · {}", player.number, player.name, player.position)); }
+                        });
+                    } else {
+                        columns[1].label(RichText::new("Squad data not imported yet. Chelsea remains the only club with players and tactics.").color(MUTED));
+                    }
+                }
+            }
+        });
+    });
+    ui.add_space(20.0);
+    section_heading(ui, "ADD MANAGER", "Choose a name for your managerial career");
+    boxed_panel(ui, |ui| {
+        ui.label(RichText::new("Manager name").color(WHITE).strong());
+        ui.add(egui::TextEdit::singleline(manager_name).hint_text("Enter your manager's name").desired_width(340.0));
+        ui.add_space(12.0);
+        let valid = !manager_name.trim().is_empty() && !clubs.is_empty();
+        let club_name = clubs.get(*selected).map(|c| c.name.as_str()).unwrap_or("CLUB");
+        let button = ui.add_enabled(valid, egui::Button::new(RichText::new(format!("TAKE CHARGE OF {}  →", club_name.to_uppercase())).color(HEADER).strong()).fill(GOLD));
+        if !valid { ui.label("Enter your manager's name to start."); }
+        launch = button.clicked();
+    });
+    launch
 }
 
 // Prototype player information. Attributes and contract figures are illustrative,
@@ -393,6 +541,7 @@ fn squad_view(ui: &mut egui::Ui, editor: &mut SquadEditor) {
                         RichText::new(player.name).color(WHITE).size(12.0)).clicked() {
                         editor.selected = idx;
                         editor.notice.clear();
+                        go_to_world(ui, WorldTarget::Player(idx));
                     }
                     ui.add(text(player.position, MUTED, 11.0));
                     ui.add(text(detail.status.label(), if detail.status == SquadStatus::FirstTeam { MUTED } else { GOLD }, 10.0));
@@ -523,7 +672,7 @@ fn right_column(root: &mut egui::Ui) {
                     ("Liverpool", "W  2–0"),
                 ] {
                     ui.horizontal(|ui| {
-                        ui.add_sized([142.0, 22.0], text(opponent, WHITE, 12.0));
+                        link_or_text(ui, opponent);
                         ui.add(text(score, GOLD, 12.0));
                     });
                 }
@@ -542,12 +691,12 @@ fn page_panel(ui: &mut egui::Ui, title: &str, subtitle: &str, rows: &[(&str, &st
     });
     ui.add_space(12.0);
 }
-fn page_view(ui: &mut egui::Ui, screen: Screen) {
+fn page_view(ui: &mut egui::Ui, screen: Screen, manager_name: &str) {
     match screen {
         Screen::Overview => {
             page_panel(ui, "CLUB OVERVIEW", "Chelsea Football Club · 2001/02", &[
                 ("Home", "Stamford Bridge, London"), ("Competition", "Premier League"),
-                ("Manager", "Claudio Ranieri (historical 2001/02)"), ("Chairman", "Ken Bates"),
+                ("Manager", manager_name), ("Chairman", "Ken Bates"),
                 ("Next match", "Chelsea vs Manchester United (demo fixture)"),
             ]);
             page_panel(ui, "SEASON DASHBOARD", "Not simulated", &[("League position", "—"), ("Played", "—"), ("Wins / draws / losses", "—"), ("Goals scored", "—")]);
@@ -573,14 +722,14 @@ fn page_view(ui: &mut egui::Ui, screen: Screen) {
             page_panel(ui, "FINANCIAL REPORT", "No accounting engine", &[("Matchday revenue", "—"), ("Merchandise", "—"), ("Transfer expenditure", "—")]);
         }
         Screen::Staff => {
-            page_panel(ui, "CLUB STAFF", "Historical names and demo vacancies", &[("First-team manager", "Claudio Ranieri (historical)"), ("Chairman", "Ken Bates"), ("Assistant manager", "Not assigned in prototype"), ("Head scout", "Not assigned in prototype"), ("Physio", "Not assigned in prototype")]);
+            page_panel(ui, "CLUB STAFF", "Historical names and demo vacancies", &[("First-team manager", manager_name), ("Chairman", "Ken Bates"), ("Assistant manager", "Not assigned in prototype"), ("Head scout", "Not assigned in prototype"), ("Physio", "Not assigned in prototype")]);
             page_panel(ui, "STAFF SEARCH", "Coming later", &[("Candidates", "No staff database yet"), ("Contracts", "Not implemented")]);
         }
         Screen::Manager => {
-            page_panel(ui, "MANAGER PROFILE", "Player-managed Chelsea save · mock-up", &[("Club", "Chelsea FC"), ("Role", "Manager"), ("Start date", "18 August 2001 (demo)"), ("Career matches", "0"), ("Reputation", "Not calculated")]);
+            page_panel(ui, "MANAGER PROFILE", manager_name, &[("Club", "Chelsea FC"), ("Role", "Manager"), ("Start date", "18 August 2001 (demo)"), ("Career matches", "0"), ("Reputation", "Not calculated")]);
             page_panel(ui, "CAREER HISTORY", "Not simulated", &[("Previous clubs", "None recorded"), ("Trophies", "0"), ("Achievements", "None recorded")]);
         }
-        Screen::Squad | Screen::Inbox | Screen::Tactics | Screen::LeagueTable | Screen::Match | Screen::Results => {}
+        Screen::Squad | Screen::Inbox | Screen::Tactics | Screen::LeagueTable | Screen::Match | Screen::Results | Screen::World => {}
     }
 }
 
@@ -632,9 +781,8 @@ fn league_standings(ui: &mut egui::Ui, clubs: &[&str]) {
                 // Records are zero until match results are wired into the league engine.
                 let record = LeagueRecord::default();
                 let highlighted = *club == "Chelsea";
-                let colour = if highlighted { GOLD } else { WHITE };
                 ui.label(RichText::new((index + 1).to_string()).color(MUTED).size(12.0));
-                ui.add_sized([166.0, 18.0], egui::Label::new(RichText::new(*club).color(colour).strong().size(12.0)));
+                world_link(ui, club, WorldTarget::Club((*club).to_owned()));
                 for value in [record.played.to_string(), record.won.to_string(), record.drawn.to_string(),
                     record.lost.to_string(), record.goals_for.to_string(), record.goals_against.to_string(),
                     record.goal_difference().to_string(), record.points().to_string()] {
@@ -1246,9 +1394,9 @@ fn matchday_results_view(ui: &mut egui::Ui, match_state: &mut MatchState, screen
                     (match_.home_score, match_.away_score)
                 };
                 let color = if selected { GOLD } else { WHITE };
-                ui.label(RichText::new(match_.home).color(color).strong());
+                world_link(ui, match_.home, WorldTarget::Club(match_.home.to_owned()));
                 ui.label(RichText::new(format!("{} - {}", home, away)).color(color).strong().size(15.0));
-                ui.label(RichText::new(match_.away).color(color).strong());
+                world_link(ui, match_.away, WorldTarget::Club(match_.away.to_owned()));
                 ui.label(RichText::new(if selected { "YOUR MATCH · FT" } else { "FT" }).color(if selected { GOLD } else { MUTED }).size(11.0));
                 ui.end_row();
             }
@@ -1264,6 +1412,134 @@ fn matchday_results_view(ui: &mut egui::Ui, match_state: &mut MatchState, screen
         }
         ui.add_space(10.0);
         ui.label(RichText::new("Return to your Chelsea dashboard to manage Squad, Tactics, Transfers and more.").color(MUTED).size(11.0));
+    });
+}
+
+fn world_view(
+    ui: &mut egui::Ui, query: &mut String, selected: &mut Option<WorldTarget>,
+    clubs: &[Club], manager_name: &str, managed_club: &Club, squad: &SquadEditor,
+) {
+    section_heading(ui, "WORLD / LINKS", "Find clubs, players and people · 2001/02 database");
+    boxed_panel(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Search").color(GOLD).strong());
+            ui.add(egui::TextEdit::singleline(query)
+                .hint_text("Club, player, manager or chairman...").desired_width(440.0));
+            if ui.button("Clear").clicked() { query.clear(); }
+        });
+        ui.add_space(6.0);
+        ui.label(RichText::new("Links in Squad, Competitions, Results, staff and club information lead here.")
+            .color(MUTED).size(11.0));
+    });
+    ui.add_space(12.0);
+    let search = query.trim().to_lowercase();
+    ui.columns(2, |columns| {
+        columns[0].set_min_width(300.0);
+        boxed_panel(&mut columns[0], |ui| {
+            section_heading(ui, "DIRECTORY", "Click an entry to view its profile");
+            egui::ScrollArea::vertical().id_salt("world_directory").max_height(530.0).show(ui, |ui| {
+                ui.label(RichText::new("CLUBS").color(GOLD).strong());
+                for club in clubs {
+                    if club.name.to_lowercase().contains(&search) || club.city.to_lowercase().contains(&search) {
+                        if ui.selectable_label(matches!(selected.as_ref(), Some(WorldTarget::Club(name)) if name == &club.name),
+                            format!("{} · {}", club.name, club.city)).clicked() {
+                            *selected = Some(WorldTarget::Club(club.name.clone()));
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new("PLAYERS · CHELSEA 2001/02").color(GOLD).strong());
+                for (index, player) in PLAYERS.iter().enumerate() {
+                    if player.name.to_lowercase().contains(&search) || player.position.to_lowercase().contains(&search) {
+                        if ui.selectable_label(matches!(selected.as_ref(), Some(WorldTarget::Player(i)) if *i == index),
+                            format!("#{} {} · {}", player.number, player.name, player.position)).clicked() {
+                            *selected = Some(WorldTarget::Player(index));
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new("MANAGERS / STAFF").color(GOLD).strong());
+                let people = [manager_name, managed_club.chairman.as_str(), "Ken Bates", "Steve Clarke", "Claudio Ranieri"];
+                for person in people {
+                    if !person.is_empty() && person != "Not recorded" && person.to_lowercase().contains(&search) {
+                        if ui.selectable_label(matches!(selected.as_ref(), Some(WorldTarget::Person(name)) if name == person), person).clicked() {
+                            *selected = Some(WorldTarget::Person(person.to_owned()));
+                        }
+                    }
+                }
+            });
+        });
+        boxed_panel(&mut columns[1], |ui| {
+            section_heading(ui, "PROFILE", "Shared football world details");
+            match selected.as_ref() {
+                Some(WorldTarget::Club(name)) => {
+                    if let Some(club) = clubs.iter().find(|c| c.name.eq_ignore_ascii_case(name)) {
+                        ui.heading(RichText::new(&club.name).color(GOLD));
+                        info_line(ui,"Nickname",&club.nickname);
+                        info_line(ui,"City",&club.city);
+                        info_line(ui,"Stadium",&club.stadium);
+                        info_line(ui,"Founded",&club.founded.to_string());
+                        info_line(ui,"Competition",&club.competition);
+                        info_line(ui,"Chairman",&club.chairman);
+                        info_line(ui,"Transfer budget",&format!("£{} (demo)",club.transfer_budget));
+                        info_line(ui,"Wage budget",&format!("£{}/week (demo)",club.weekly_wage_budget));
+                        ui.add_space(12.0);
+                        ui.label(RichText::new("SQUAD").color(GOLD).strong());
+                        if club.id == "chelsea" {
+                            egui::ScrollArea::vertical().id_salt("world_club_roster_scroll").max_height(215.0).show(ui, |ui| {
+                                for (index,p) in PLAYERS.iter().enumerate() {
+                                    world_link(ui, &format!("#{}  {} · {}",p.number,p.name,p.position), WorldTarget::Player(index));
+                                }
+                            });
+                        } else {
+                            ui.label(RichText::new("Squad not yet imported into the player database.").color(MUTED));
+                        }
+                    } else {
+                        ui.label(RichText::new(name).color(GOLD).strong());
+                        ui.label(RichText::new("Club is listed in 2001/02 competitions; full club data not imported yet.").color(MUTED));
+                    }
+                }
+                Some(WorldTarget::Player(index)) => {
+                    if let (Some(player), Some(d)) = (PLAYERS.get(*index), squad.details.get(*index)) {
+                        ui.heading(RichText::new(player.name).color(GOLD));
+                        info_line(ui,"Club","Chelsea");
+                        info_line(ui,"Squad number",&player.number.to_string());
+                        info_line(ui,"Position",player.position);
+                        info_line(ui,"Nationality",player.nationality);
+                        info_line(ui,"Age in 2001",&player.age.to_string());
+                        info_line(ui,"Situation",d.status.label());
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("ATTRIBUTES · ILLUSTRATIVE 1–20").color(GOLD).strong());
+                        egui::Grid::new("world_attributes").striped(true).show(ui, |ui| {
+                            for (name,value) in attribute_values(player) {
+                                ui.label(name); ui.label(RichText::new(value.to_string()).color(if value >= 15 {GOLD} else {WHITE})); ui.end_row();
+                            }
+                        });
+                        ui.add_space(9.0);
+                        ui.label(RichText::new("SEASON STATISTICS").color(GOLD).strong());
+                        info_line(ui,"Appearances",&d.appearances.to_string());
+                        info_line(ui,"Goals",&d.goals.to_string());
+                        info_line(ui,"Assists",&d.assists.to_string());
+                        ui.add_space(9.0);
+                        ui.label(RichText::new("CONTRACT · DEMO VALUES").color(GOLD).strong());
+                        info_line(ui,"Weekly wage",&format!("£{}",d.weekly_wage));
+                        info_line(ui,"Expiry",&d.contract_end.to_string());
+                    }
+                }
+                Some(WorldTarget::Person(name)) => {
+                    ui.heading(RichText::new(name).color(GOLD));
+                    let role = if name == manager_name {"Your manager"}
+                        else if name == "Ken Bates" {"Chairman · Chelsea"}
+                        else if name == "Steve Clarke" {"Assistant manager · demo Inbox"}
+                        else if name == "Claudio Ranieri" {"Chelsea manager (historical reference)"}
+                        else {"Club official / staff"};
+                    info_line(ui,"Role",role);
+                    info_line(ui,"Situation",if name == manager_name {"Managing current club"} else {"Historical / demo database entry"});
+                    ui.label(RichText::new("Staff attributes and contracts will appear when a staff database is added.").color(MUTED));
+                }
+                None => { ui.label(RichText::new("Select a result on the left to open its details.").color(MUTED)); }
+            }
+        });
     });
 }
 
@@ -1289,34 +1565,57 @@ struct FootballManagerUi {
     league_view: usize,
     squad: SquadEditor,
     match_state: MatchState,
+    setup_complete: bool,
+    manager_name: String,
+    preview_club: bool,
+    clubs: ClubDatabase,
+    selected_club: usize,
+    world_query: String,
+    world_target: Option<WorldTarget>,
 }
 
 impl Default for FootballManagerUi {
     fn default() -> Self {
-        Self { screen: Screen::Squad, selected_message: 0, tactics: TacticsEditor::default(), competition_tab: 0, league_view: 0, squad: SquadEditor::default(), match_state: MatchState::default() }
+        Self { screen: Screen::Squad, selected_message: 0, tactics: TacticsEditor::default(), competition_tab: 0, league_view: 0, squad: SquadEditor::default(), match_state: MatchState::default(), setup_complete: false, manager_name: String::new(), preview_club: true, clubs: load_clubs(), selected_club: 5, world_query: String::new(), world_target: None }
     }
 }
 
 impl eframe::App for FootballManagerUi {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         root.ctx().set_visuals(egui::Visuals::dark());
+        if !self.setup_complete {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(32, 24)))
+                .show(root, |ui| {
+                    egui::ScrollArea::vertical().id_salt("career_main_scroll").show(ui, |ui| {
+                        if new_career_view(ui, &mut self.manager_name, &mut self.preview_club, &self.clubs.clubs, &mut self.selected_club) {
+                            self.manager_name = self.manager_name.trim().to_owned();
+                            self.setup_complete = true;
+                            self.selected_message = 0;
+                            self.screen = Screen::Inbox;
+                        }
+                    });
+                });
+            return;
+        }
         self.match_state.tick();
         if self.match_state.halftime_pending {
             self.match_state.halftime_pending = false;
             self.screen = Screen::Tactics;
         }
-        top_bar(root, &mut self.screen, &mut self.match_state);
-        if !matches!(self.screen, Screen::Match | Screen::Results) { side_bar(root, &mut self.screen); }
+        let club = &self.clubs.clubs[self.selected_club];
+        if club.id == "chelsea" { top_bar(root, &mut self.screen, &mut self.match_state); } else { top_bar_non_chelsea(root, club); }
+        if !matches!(self.screen, Screen::Match | Screen::Results) { side_bar(root, &mut self.screen, club); }
         bottom_bar(root, self.screen);
-        if !matches!(self.screen, Screen::Match | Screen::Results) { right_column(root); }
+        if club.id == "chelsea" && !matches!(self.screen, Screen::Match | Screen::Results) { right_column(root); }
         if self.match_state.started && !self.match_state.paused && !self.match_state.finished {
             root.ctx().request_repaint_after(std::time::Duration::from_millis(80));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(17, 16)))
             .show(root, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add(text(format!("Chelsea FC  /  {}", self.screen.label()), MUTED, 11.0));
+                egui::ScrollArea::vertical().id_salt("game_main_scroll").show(ui, |ui| {
+                    ui.add(text(format!("{}  /  {}", club.name, self.screen.label()), MUTED, 11.0));
                     ui.add_space(15.0);
                     if self.screen == Screen::Tactics && self.match_state.started && !self.match_state.finished {
                         ui.horizontal(|ui| {
@@ -1331,14 +1630,27 @@ impl eframe::App for FootballManagerUi {
                     match self.screen {
                         Screen::Match => match_view(ui, &mut self.match_state, &mut self.screen),
                         Screen::Results => matchday_results_view(ui, &mut self.match_state, &mut self.screen),
-                        Screen::Squad => boxed_panel(ui, |ui| squad_view(ui, &mut self.squad)),
-                        Screen::Inbox => inbox_view(ui, &mut self.selected_message),
-                        Screen::Tactics => tactics_view(ui, &mut self.tactics),
+                        Screen::Squad => { if club.squad_available { boxed_panel(ui, |ui| squad_view(ui, &mut self.squad)); } else { page_panel(ui, "SQUAD", "Awaiting historical player database", &[("Club", club.name.as_str()), ("Status", "Player data not imported")]); } },
+                        Screen::Inbox => inbox_view(ui, &mut self.selected_message, &self.manager_name, club),
+                        Screen::World => world_view(ui, &mut self.world_query, &mut self.world_target,
+                            &self.clubs.clubs, &self.manager_name, club, &self.squad),
+                        Screen::Tactics => { if club.squad_available { tactics_view(ui, &mut self.tactics); } else { page_panel(ui, "TACTICS", "Squad data required", &[("Club", club.name.as_str()), ("Status", "Chelsea tactics demo only for now")]); } },
                         Screen::LeagueTable => competitions_view(ui, &mut self.competition_tab, &mut self.league_view),
-                        other => page_view(ui, other),
+                        other => { if other == Screen::Overview { page_panel(ui, "CLUB OVERVIEW", &format!("{} · 2001/02", club.name), &[("Home", club.stadium.as_str()), ("Competition", club.competition.as_str()), ("Manager", self.manager_name.as_str()), ("Chairman", club.chairman.as_str())]); } else if club.id != "chelsea" { page_panel(ui, other.label().to_uppercase().as_str(), "Under construction for this club", &[("Club", club.name.as_str()), ("Note", "Club-specific data not imported yet")]); } else { page_view(ui, other, &self.manager_name); } },
                     }
                 });
             });
+        // Apply any entity link clicked during this frame. Navigation occurs on the next repaint.
+        let nav_id = egui::Id::new(WORLD_NAV_KEY);
+        let pending_target = root.ctx().data_mut(|data| {
+            let target = data.get_temp::<WorldTarget>(nav_id);
+            data.remove::<WorldTarget>(nav_id);
+            target
+        });
+        if let Some(target) = pending_target {
+            self.world_target = Some(target);
+            self.screen = Screen::World;
+        }
     }
 }
 
